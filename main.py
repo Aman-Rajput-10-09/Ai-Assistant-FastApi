@@ -1,0 +1,104 @@
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from core.config import settings
+from core.database import Base, engine
+from core.exceptions import BaseAPIException
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO if settings.ENV == "development" else logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Import routers
+from routers.auth import router as auth_router
+from routers.users import router as users_router
+from routers.tasks import router as tasks_router
+from routers.chat import router as chat_router
+from routers.search import router as search_router
+from routers.analytics import router as analytics_router
+from routers.calendar import router as calendar_router
+from routers.memory import router as memory_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup Database Setup
+    logger.info("Initializing database extension and tables...")
+    async with engine.begin() as conn:
+        # Create vector extension if postgres is supporting it
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            logger.info("pgvector extension loaded/verified.")
+        except Exception as e:
+            logger.warning(f"Could not load pgvector extension: {e}. Semantic search features might degrade.")
+            
+        # Create all tables
+        await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified.")
+        
+    yield
+    # Shutdown logic
+    logger.info("Shutting down scheduling backend...")
+    await engine.dispose()
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    description="Production-grade AI Assistant Backend for Scheduling",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routers
+api_prefix = "/api/v1"
+app.include_router(auth_router, prefix=api_prefix)
+app.include_router(users_router, prefix=api_prefix)
+app.include_router(tasks_router, prefix=api_prefix)
+app.include_router(chat_router, prefix=api_prefix)
+app.include_router(search_router, prefix=api_prefix)
+app.include_router(analytics_router, prefix=api_prefix)
+app.include_router(calendar_router, prefix=api_prefix)
+app.include_router(memory_router, prefix=api_prefix)
+
+
+# Global custom exception handler
+@app.exception_handler(BaseAPIException)
+async def api_exception_handler(request: Request, exc: BaseAPIException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "success": False}
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled Exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error occurred", "success": False}
+    )
+
+
+@app.get("/")
+async def root():
+    return {
+        "status": "healthy",
+        "app": settings.PROJECT_NAME,
+        "environment": settings.ENV,
+        "docs": "/docs"
+    }
