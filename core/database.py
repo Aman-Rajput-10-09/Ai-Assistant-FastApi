@@ -23,8 +23,20 @@ class Base(DeclarativeBase):
     pass
 
 
+_db_initialized = False
+
+
 # Dependency to get async DB session
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            _db_initialized = True
+        except Exception:
+            pass
+
     async with async_session_maker() as session:
         try:
             yield session
