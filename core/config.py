@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str = "sqlite+aiosqlite:///./dev.db"
 
     # Security
     SECRET_KEY: str = "production-grade-development-jwt-signing-key-secret-392810"
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_TEXT: str = "gemini-3.5-flash"
     GEMINI_MODEL_TEXT_FALLBACKS: str = "gemini-flash-latest,gemini-2.5-flash"
-    GEMINI_MODEL_EMBED: str = "models/text-embedding-004"
+    GEMINI_MODEL_EMBED: str = "models/gemini-embedding-001"
 
     # Redis
     REDIS_HOST: str = "localhost"
