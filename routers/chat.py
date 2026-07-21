@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
@@ -15,6 +17,33 @@ from background.worker import background_worker
 
 router = APIRouter(prefix="/chat", tags=["AI Chat Assistant"])
 logger = logging.getLogger(__name__)
+
+
+def _format_alarm_fields(reminder_at: Optional[str]) -> dict:
+    if not reminder_at:
+        return {
+            "should_schedule_alarm": False,
+            "reminder_at": None,
+            "reminder_date": None,
+            "reminder_time": None,
+        }
+
+    try:
+        parsed = datetime.fromisoformat(reminder_at)
+    except ValueError:
+        return {
+            "should_schedule_alarm": False,
+            "reminder_at": None,
+            "reminder_date": None,
+            "reminder_time": None,
+        }
+
+    return {
+        "should_schedule_alarm": True,
+        "reminder_at": parsed.isoformat(),
+        "reminder_date": parsed.date().isoformat(),
+        "reminder_time": parsed.strftime("%H:%M"),
+    }
 
 
 @router.post("", response_model=ChatResponse)
@@ -44,6 +73,10 @@ async def chat_assistant(
 
     reply_text = ""
     structured_data = None
+    should_schedule_alarm = False
+    reminder_at = None
+    reminder_date = None
+    reminder_time = None
 
     # 3. Handle based on Intent Type
     if intent in ["CREATE_TASK", "UPDATE_TASK", "DELETE_TASK", "COMPLETE_TASK", "QUERY_DATABASE", "CALENDAR_QUERY", "ANALYTICS"]:
@@ -52,13 +85,22 @@ async def chat_assistant(
             # Execute DB operation
             db_res = await db_agent_service.execute_intent(db, current_user.id, intent_output, background_tasks)
             structured_data = db_res
+            if intent in {"CREATE_TASK", "UPDATE_TASK"} and db_res.get("success") and intent_output.due_date:
+                alarm_fields = _format_alarm_fields(intent_output.due_date)
+                should_schedule_alarm = alarm_fields["should_schedule_alarm"]
+                reminder_at = alarm_fields["reminder_at"]
+                reminder_date = alarm_fields["reminder_date"]
+                reminder_time = alarm_fields["reminder_time"]
             
             # Use Gemini to generate a friendly response from the database output
             prompt = (
                 f"You are a scheduling AI assistant. The user requested: '{user_msg}'.\n"
                 f"The database agent executed the action successfully and returned this data:\n"
                 f"{db_res}\n\n"
-                f"Explain this result clearly and concisely to the user in a natural, polite manner."
+                f"If this is a scheduled task or reminder, use this local alarm datetime for the user-facing response: "
+                f"{reminder_at or 'not applicable'}.\n"
+                f"Explain this result clearly and concisely to the user in a natural, polite manner. "
+                f"Do not mention internal UTC storage or system conversion details."
             )
             reply_text = await GeminiClient.generate_text(prompt)
         except Exception as e:
@@ -110,5 +152,9 @@ async def chat_assistant(
     return ChatResponse(
         intent=intent,
         reply=reply_text,
-        structured_data=structured_data
+        structured_data=structured_data,
+        should_schedule_alarm=should_schedule_alarm,
+        reminder_at=reminder_at,
+        reminder_date=reminder_date,
+        reminder_time=reminder_time
     )

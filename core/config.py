@@ -8,6 +8,9 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:////tmp/dev.db"
+    DB_CONNECT_TIMEOUT_SECONDS: int = 5
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
 
     # Security
     SECRET_KEY: str = "production-grade-development-jwt-signing-key-secret-392810"

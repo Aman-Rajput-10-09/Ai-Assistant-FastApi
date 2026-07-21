@@ -38,6 +38,10 @@ class ChatResponse(BaseModel):
     intent: str
     reply: str
     structured_data: Optional[Dict[str, Any]] = None
+    should_schedule_alarm: bool = False
+    reminder_at: Optional[str] = None
+    reminder_date: Optional[str] = None
+    reminder_time: Optional[str] = None
 
 
 # --- Semantic Search Schemas ---

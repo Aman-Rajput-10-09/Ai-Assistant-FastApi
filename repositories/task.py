@@ -62,7 +62,12 @@ class TaskRepository(BaseRepository[Task]):
                     Task.due_date <= end_date
                 )
             )
-            .options(selectinload(Task.category), selectinload(Task.reminders))
+            .options(
+                selectinload(Task.category),
+                selectinload(Task.reminders),
+                selectinload(Task.recurring_rules),
+                selectinload(Task.attachments),
+            )
             .order_by(Task.due_date.asc())
         )
         res = await db.execute(stmt)

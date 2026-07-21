@@ -100,14 +100,15 @@ class GeminiClient:
 
     @classmethod
     async def get_embedding(cls, text: str) -> List[float]:
-        """Generate 768-dimensional text embeddings using Gemini text-embedding-004."""
+        """Generate 768-dimensional text embeddings using Gemini embeddings."""
         if not is_gemini_active:
             return cls._mock_embedding(text)
         try:
             result = genai.embed_content(
                 model=cls.MODEL_EMBED,
                 content=text,
-                task_type="retrieval_document"
+                task_type="retrieval_document",
+                output_dimensionality=768
             )
             return result["embedding"]
         except Exception as e:

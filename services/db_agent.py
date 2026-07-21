@@ -85,8 +85,7 @@ class DatabaseAgentService:
         # 4. Create default reminders if due date is provided
         reminders_created = []
         if due_date:
-            # Create a reminder 1 hour before due date
-            reminder_time = due_date - timedelta(hours=1)
+            reminder_time = due_date
             reminder = await reminder_repository.create(
                 db,
                 obj_in={
