@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
 from core.config import settings
 from core.database import Base, engine
@@ -93,6 +94,15 @@ async def api_exception_handler(request: Request, exc: BaseAPIException):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled Exception: {exc}", exc_info=True)
+    if isinstance(exc, (OperationalError, TimeoutError, OSError)):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": "Database is unavailable. Check database networking, firewall, SSL, and connection string settings.",
+                "success": False,
+            },
+        )
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error occurred", "success": False}
@@ -107,3 +117,22 @@ async def root():
         "environment": settings.ENV,
         "docs": "/docs"
     }
+
+
+@app.get("/health/db")
+async def database_health():
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.warning(f"Database health check failed: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "unhealthy",
+                "database": "unreachable",
+                "detail": "Could not connect to the configured database.",
+            },
+        )
+
+    return {"status": "healthy", "database": "reachable"}
