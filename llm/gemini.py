@@ -4,9 +4,19 @@ import random
 from typing import List, Optional, Type, TypeVar
 
 try:
-    import google.generativeai as genai
+    from google import genai as google_genai
+    from google.genai import types as genai_types
+    _USE_GENAI_SDK = True
+except Exception:
+    google_genai = None
+    genai_types = None
+    _USE_GENAI_SDK = False
+
+try:
+    import google.generativeai as legacy_genai
     _USE_LEGACY_SDK = True
 except Exception:
+    legacy_genai = None
     _USE_LEGACY_SDK = False
 
 from pydantic import BaseModel
@@ -16,12 +26,19 @@ logger = logging.getLogger(__name__)
 
 # Configure Gemini API if key is available
 is_gemini_active = False
+_genai_client = None
 if settings.GEMINI_API_KEY:
     try:
-        if _USE_LEGACY_SDK:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-        is_gemini_active = True
-        logger.info("Gemini API initialized successfully.")
+        if _USE_GENAI_SDK:
+            _genai_client = google_genai.Client(api_key=settings.GEMINI_API_KEY)
+            is_gemini_active = True
+            logger.info("Gemini API initialized with google-genai SDK.")
+        elif _USE_LEGACY_SDK:
+            legacy_genai.configure(api_key=settings.GEMINI_API_KEY)
+            is_gemini_active = True
+            logger.info("Gemini API initialized with legacy google-generativeai SDK.")
+        else:
+            logger.error("No Gemini SDK installed. Install google-genai to enable live Gemini responses.")
     except Exception as e:
         logger.error(f"Failed to configure Gemini API: {e}. Falling back to MOCK mode.")
 else:
@@ -33,6 +50,10 @@ T = TypeVar("T", bound=BaseModel)
 class GeminiClient:
     MODEL_TEXT = settings.GEMINI_MODEL_TEXT
     MODEL_EMBED = settings.GEMINI_MODEL_EMBED
+
+    @classmethod
+    def _sdk_model_name(cls, model_name: str) -> str:
+        return model_name.removeprefix("models/")
 
     @classmethod
     def _text_model_names(cls) -> List[str]:
@@ -53,13 +74,31 @@ class GeminiClient:
 
         for model_name in cls._text_model_names():
             try:
-                model = genai.GenerativeModel(
+                if _genai_client:
+                    response = await _genai_client.aio.models.generate_content(
+                        model=cls._sdk_model_name(model_name),
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            response_mime_type="application/json",
+                            response_schema=schema,
+                            temperature=0.1,
+                        ),
+                    )
+                    if getattr(response, "parsed", None) is not None:
+                        parsed = response.parsed
+                        return parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
+
+                    data = json.loads(response.text)
+                    return schema.model_validate(data)
+
+                model = legacy_genai.GenerativeModel(
                     model_name=model_name,
                     system_instruction=system_instruction
                 )
                 response = model.generate_content(
                     prompt,
-                    generation_config=genai.GenerationConfig(
+                    generation_config=legacy_genai.GenerationConfig(
                         response_mime_type="application/json",
                         response_schema=schema,
                         temperature=0.1
@@ -85,7 +124,17 @@ class GeminiClient:
         last_error: Optional[Exception] = None
         for model_name in cls._text_model_names():
             try:
-                model = genai.GenerativeModel(
+                if _genai_client:
+                    response = await _genai_client.aio.models.generate_content(
+                        model=cls._sdk_model_name(model_name),
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                        ) if system_instruction else None,
+                    )
+                    return response.text or ""
+
+                model = legacy_genai.GenerativeModel(
                     model_name=model_name,
                     system_instruction=system_instruction
                 )
@@ -104,7 +153,20 @@ class GeminiClient:
         if not is_gemini_active:
             return cls._mock_embedding(text)
         try:
-            result = genai.embed_content(
+            if _genai_client:
+                embed_model = cls._sdk_model_name(cls.MODEL_EMBED)
+                config_kwargs = {"output_dimensionality": 768}
+                if embed_model == "gemini-embedding-001":
+                    config_kwargs["task_type"] = "RETRIEVAL_DOCUMENT"
+
+                result = await _genai_client.aio.models.embed_content(
+                    model=embed_model,
+                    contents=text,
+                    config=genai_types.EmbedContentConfig(**config_kwargs),
+                )
+                return list(result.embeddings[0].values)
+
+            result = legacy_genai.embed_content(
                 model=cls.MODEL_EMBED,
                 content=text,
                 task_type="retrieval_document",
