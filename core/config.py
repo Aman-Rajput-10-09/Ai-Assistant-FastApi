@@ -20,8 +20,8 @@ class Settings(BaseSettings):
 
     # Gemini
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL_TEXT: str = "gemini-3.5-flash"
-    GEMINI_MODEL_TEXT_FALLBACKS: str = "gemini-flash-latest,gemini-2.5-flash"
+    GEMINI_MODEL_TEXT: str = "gemini-2.5-flash"
+    GEMINI_MODEL_TEXT_FALLBACKS: str = "gemini-2.0-flash,gemini-flash-latest"
     GEMINI_MODEL_EMBED: str = "models/gemini-embedding-001"
 
     # Redis

@@ -12,12 +12,16 @@ except Exception:
     genai_types = None
     _USE_GENAI_SDK = False
 
-try:
-    import google.generativeai as legacy_genai
-    _USE_LEGACY_SDK = True
-except Exception:
+if _USE_GENAI_SDK:
     legacy_genai = None
     _USE_LEGACY_SDK = False
+else:
+    try:
+        import google.generativeai as legacy_genai
+        _USE_LEGACY_SDK = True
+    except Exception:
+        legacy_genai = None
+        _USE_LEGACY_SDK = False
 
 from pydantic import BaseModel
 from core.config import settings
