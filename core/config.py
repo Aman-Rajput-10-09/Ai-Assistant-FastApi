@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./dev.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:////tmp/dev.db"
 
     # Security
     SECRET_KEY: str = "production-grade-development-jwt-signing-key-secret-392810"
