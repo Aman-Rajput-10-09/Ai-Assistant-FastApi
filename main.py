@@ -30,22 +30,27 @@ from routers.memory import router as memory_router
 async def lifespan(app: FastAPI):
     # Startup Database Setup
     logger.info("Initializing database extension and tables...")
-    async with engine.begin() as conn:
-        # Create vector extension if postgres is supporting it
-        try:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            logger.info("pgvector extension loaded/verified.")
-        except Exception as e:
-            logger.warning(f"Could not load pgvector extension: {e}. Semantic search features might degrade.")
-            
-        # Create all tables
-        await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables verified.")
+    try:
+        async with engine.begin() as conn:
+            try:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                logger.info("pgvector extension loaded/verified.")
+            except Exception as e:
+                logger.warning(f"Could not load pgvector extension: {e}. Semantic search features might degrade.")
+                
+            # Create all tables
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables verified.")
+    except Exception as e:
+        logger.error(f"Database initialization error (skipped for serverless cold start): {e}")
         
     yield
     # Shutdown logic
     logger.info("Shutting down scheduling backend...")
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except Exception:
+        pass
 
 
 app = FastAPI(
