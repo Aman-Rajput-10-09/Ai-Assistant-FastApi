@@ -15,35 +15,10 @@ from memory.long_term import long_term_memory_service
 from llm.gemini import GeminiClient
 from background.worker import background_worker
 
+from agents.master_orchestrator import master_orchestrator
+
 router = APIRouter(prefix="/chat", tags=["AI Chat Assistant"])
 logger = logging.getLogger(__name__)
-
-
-def _format_alarm_fields(reminder_at: Optional[str]) -> dict:
-    if not reminder_at:
-        return {
-            "should_schedule_alarm": False,
-            "reminder_at": None,
-            "reminder_date": None,
-            "reminder_time": None,
-        }
-
-    try:
-        parsed = datetime.fromisoformat(reminder_at)
-    except ValueError:
-        return {
-            "should_schedule_alarm": False,
-            "reminder_at": None,
-            "reminder_date": None,
-            "reminder_time": None,
-        }
-
-    return {
-        "should_schedule_alarm": True,
-        "reminder_at": parsed.isoformat(),
-        "reminder_date": parsed.date().isoformat(),
-        "reminder_time": parsed.strftime("%H:%M"),
-    }
 
 
 @router.post("", response_model=ChatResponse)
@@ -54,107 +29,39 @@ async def chat_assistant(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Intelligent Assistant endpoint that routes requests to SQL DB Agent, 
-    Vector Similarity Search, or general conversational RAG.
+    Multi-Agent Assistant endpoint that decomposes queries, dispatches sub-tasks 
+    to specialized worker agents, and synthesizes consolidated responses.
     """
     user_msg = request.message
     logger.info(f"Received chat message from user {current_user.id}: {user_msg}")
     
-    # 1. Route Intent
-    intent_output = await intent_router_service.route_intent(user_msg)
-    intent = intent_output.intent
-
-    # 2. Save User Message to History
+    # 1. Save User Message to History
     user_chat_obj = await chat_message_repository.create_chat_message(
         db, user_id=current_user.id, role="user", content=user_msg
     )
     # Schedule embedding generation for user message
     background_tasks.add_task(background_worker.generate_chat_message_embedding, user_chat_obj.id)
 
-    reply_text = ""
-    structured_data = None
-    should_schedule_alarm = False
-    reminder_at = None
-    reminder_date = None
-    reminder_time = None
+    # 2. Process query via Master Orchestrator (Multi-Agent Pipeline)
+    response = await master_orchestrator.process_user_message(
+        user_query=user_msg,
+        db=db,
+        user_id=current_user.id,
+        background_tasks=background_tasks
+    )
 
-    # 3. Handle based on Intent Type
-    if intent in ["CREATE_TASK", "UPDATE_TASK", "DELETE_TASK", "COMPLETE_TASK", "QUERY_DATABASE", "CALENDAR_QUERY", "ANALYTICS"]:
-        # DATABASE AGENT FLOW (SQL CRUD + Analytics + Calendar)
-        try:
-            # Execute DB operation
-            db_res = await db_agent_service.execute_intent(db, current_user.id, intent_output, background_tasks)
-            structured_data = db_res
-            if intent in {"CREATE_TASK", "UPDATE_TASK"} and db_res.get("success") and intent_output.due_date:
-                alarm_fields = _format_alarm_fields(intent_output.due_date)
-                should_schedule_alarm = alarm_fields["should_schedule_alarm"]
-                reminder_at = alarm_fields["reminder_at"]
-                reminder_date = alarm_fields["reminder_date"]
-                reminder_time = alarm_fields["reminder_time"]
-            
-            # Use Gemini to generate a friendly response from the database output
-            prompt = (
-                f"You are a scheduling AI assistant. The user requested: '{user_msg}'.\n"
-                f"The database agent executed the action successfully and returned this data:\n"
-                f"{db_res}\n\n"
-                f"If this is a scheduled task or reminder, use this local alarm datetime for the user-facing response: "
-                f"{reminder_at or 'not applicable'}.\n"
-                f"Explain this result clearly and concisely to the user in a natural, polite manner. "
-                f"Do not mention internal UTC storage or system conversion details."
-            )
-            reply_text = await GeminiClient.generate_text(prompt)
-        except Exception as e:
-            logger.error(f"Database Agent failed: {e}")
-            reply_text = f"I encountered an issue processing your request: {str(e)}"
-            structured_data = {"error": str(e), "success": False}
-
-    elif intent == "AI_MEMORY":
-        # LONG-TERM MEMORY RETRIEVAL / QUERY FLOW
-        # Retrieve long-term memory context via vector search
-        memory_context = await context_builder.build_context(db, current_user.id, user_msg)
-        
-        prompt = (
-            f"You are a helpful AI assistant with long-term memory capacity.\n"
-            f"Here is what you remember about the user:\n"
-            f"{memory_context}\n\n"
-            f"The user is asking: '{user_msg}'.\n"
-            f"Respond to the user utilizing the memory context above if it is relevant. Otherwise, reply conversationally."
-        )
-        reply_text = await GeminiClient.generate_text(prompt)
-
-    else:
-        # GENERAL CHAT FLOW (RAG-Augmented)
-        # Compile contextual ranking: recency, importance, semantic similarity, frequency
-        rag_context = await context_builder.build_context(db, current_user.id, user_msg)
-        
-        prompt = (
-            f"You are a premium AI scheduling assistant. Here is the relevant context retrieved from the user's account:\n"
-            f"{rag_context}\n\n"
-            f"User message: '{user_msg}'\n\n"
-            f"Please respond to the user query. Reference the context if useful (e.g. reminding them about tasks or info they have set)."
-        )
-        reply_text = await GeminiClient.generate_text(prompt)
-
-    # 4. Save Assistant Response to History
+    # 3. Save Assistant Response to History
     assistant_chat_obj = await chat_message_repository.create_chat_message(
-        db, user_id=current_user.id, role="assistant", content=reply_text
+        db, user_id=current_user.id, role="assistant", content=response.reply
     )
     # Schedule embedding generation for assistant message
     background_tasks.add_task(background_worker.generate_chat_message_embedding, assistant_chat_obj.id)
 
-    # 5. Extract Long-Term Memory from conversation exchange
-    # (If the conversation contains valuable details, index it)
+    # 4. Extract Long-Term Memory from conversation exchange
     background_tasks.add_task(
         long_term_memory_service.extract_and_save_memory,
-        db, current_user.id, user_msg, reply_text
+        db, current_user.id, user_msg, response.reply
     )
 
-    return ChatResponse(
-        intent=intent,
-        reply=reply_text,
-        structured_data=structured_data,
-        should_schedule_alarm=should_schedule_alarm,
-        reminder_at=reminder_at,
-        reminder_date=reminder_date,
-        reminder_time=reminder_time
-    )
+    return response
+

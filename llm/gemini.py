@@ -240,6 +240,60 @@ class GeminiClient:
                 chat_reply_suggestion=f"[Mock Route: {intent}] Set GEMINI_API_KEY for live AI."
             )
 
+        if schema.__name__ == "MultiAgentPlan":
+            from schemas.ai import SubTask, MultiAgentPlan
+            sub_tasks = []
+            
+            # Check for multiple intents or keywords
+            if any(kw in prompt_lower for kw in ["remind", "todo", "task", "call", "meeting", "schedule"]):
+                sub_tasks.append(SubTask(
+                    task_id=f"task_{len(sub_tasks)+1}",
+                    intent="CREATE_TASK",
+                    agent_target="task_worker",
+                    title="Scheduled Task",
+                    due_date="2026-07-05T20:00:00" if "tomorrow" in prompt_lower else None,
+                    sub_prompt=prompt
+                ))
+
+            if any(kw in prompt_lower for kw in ["productivity", "analytics", "stats", "how many", "completion"]):
+                sub_tasks.append(SubTask(
+                    task_id=f"task_{len(sub_tasks)+1}",
+                    intent="ANALYTICS",
+                    agent_target="analytics_worker",
+                    analytics_metric="completion_rate",
+                    sub_prompt=prompt
+                ))
+
+            if any(kw in prompt_lower for kw in ["today", "calendar", "agenda"]):
+                sub_tasks.append(SubTask(
+                    task_id=f"task_{len(sub_tasks)+1}",
+                    intent="CALENDAR_QUERY",
+                    agent_target="task_worker",
+                    sub_prompt=prompt
+                ))
+
+            if any(kw in prompt_lower for kw in ["remember", "memory", "forgot", "recall"]):
+                sub_tasks.append(SubTask(
+                    task_id=f"task_{len(sub_tasks)+1}",
+                    intent="AI_MEMORY",
+                    agent_target="memory_worker",
+                    sub_prompt=prompt
+                ))
+
+            if not sub_tasks:
+                sub_tasks.append(SubTask(
+                    task_id="task_1",
+                    intent="GENERAL_CHAT",
+                    agent_target="chat_worker",
+                    sub_prompt=prompt
+                ))
+
+            return schema(
+                is_multi_intent=len(sub_tasks) > 1,
+                user_query=prompt,
+                sub_tasks=sub_tasks
+            )
+
         if schema.__name__ == "MemoryExtraction":
             return schema(
                 summary="NONE",
