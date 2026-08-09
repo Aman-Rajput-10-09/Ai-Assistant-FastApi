@@ -51,6 +51,20 @@ else:
 T = TypeVar("T", bound=BaseModel)
 
 
+def _sanitize_json_schema(schema: Any) -> Any:
+    """Recursively remove keys unsupported by Google GenAI Schema specification."""
+    if isinstance(schema, dict):
+        clean = {}
+        for k, v in schema.items():
+            if k in {"default", "title", "additionalProperties", "$schema", "$defs"}:
+                continue
+            clean[k] = _sanitize_json_schema(v)
+        return clean
+    elif isinstance(schema, list):
+        return [_sanitize_json_schema(item) for item in schema]
+    return schema
+
+
 class GeminiClient:
     MODEL_TEXT = settings.GEMINI_MODEL_TEXT
     MODEL_EMBED = settings.GEMINI_MODEL_EMBED
@@ -76,6 +90,9 @@ class GeminiClient:
         if not is_gemini_active:
             return cls._mock_structured_output(prompt, schema)
 
+        raw_schema = schema.model_json_schema()
+        clean_schema = _sanitize_json_schema(raw_schema)
+
         for model_name in cls._text_model_names():
             try:
                 if _genai_client:
@@ -85,7 +102,7 @@ class GeminiClient:
                         config=genai_types.GenerateContentConfig(
                             system_instruction=system_instruction,
                             response_mime_type="application/json",
-                            response_schema=schema,
+                            response_schema=clean_schema,
                             temperature=0.1,
                         ),
                     )
@@ -194,7 +211,12 @@ class GeminiClient:
     def _mock_structured_output(cls, prompt: str, schema: Type[T]) -> T:
         """Heuristic mock outputs for local development without API keys."""
         logger.info(f"Generating mock structured output for schema: {schema.__name__}")
-        prompt_lower = prompt.lower()
+        user_text = prompt
+        if "'" in prompt:
+            parts = prompt.split("'")
+            if len(parts) >= 3:
+                user_text = parts[1]
+        prompt_lower = user_text.lower()
 
         if schema.__name__ == "IntentRouterOutput":
             intent = "GENERAL_CHAT"
@@ -264,7 +286,7 @@ class GeminiClient:
                     sub_prompt=prompt
                 ))
 
-            if any(kw in prompt_lower for kw in ["today", "calendar", "agenda"]):
+            if any(kw in prompt_lower for kw in ["calendar", "agenda", "today's schedule", "today's tasks", "scheduled today", "my schedule"]):
                 sub_tasks.append(SubTask(
                     task_id=f"task_{len(sub_tasks)+1}",
                     intent="CALENDAR_QUERY",
