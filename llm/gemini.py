@@ -1,7 +1,7 @@
 import logging
 import json
 import random
-from typing import List, Optional, Type, TypeVar
+from typing import Any, List, Optional, Type, TypeVar
 
 try:
     from google import genai as google_genai
