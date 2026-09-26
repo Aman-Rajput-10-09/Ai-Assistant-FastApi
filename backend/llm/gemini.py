@@ -208,6 +208,53 @@ class GeminiClient:
         return [x / norm for x in emb]
 
     @classmethod
+    def _extract_mock_task_details(cls, prompt: str) -> tuple[str, str, Optional[str], str]:
+        """Extract a meaningful title, description, priority, and due date from the user prompt."""
+        cleaned = prompt.strip()
+        # Remove wrapper if passed
+        if "'" in cleaned:
+            parts = cleaned.split("'")
+            if len(parts) >= 3 and len(parts[1]) > 5:
+                cleaned = parts[1].strip()
+
+        raw_prompt = cleaned
+        # Strip common action prefixes
+        for prefix in [
+            "schedule a meeting with", "schedule a meeting", "schedule meeting with", "schedule meeting",
+            "schedule a task to", "schedule a task for", "schedule a task:", "schedule task:", "schedule task",
+            "schedule a", "schedule an", "schedule",
+            "remind me to", "remind me",
+            "create a high priority task:", "create a high priority task to", "create a priority task:",
+            "create a task to", "create a task:", "create a task", "create task:", "create task",
+            "add a task to", "add a task:", "add a task", "add task:", "add task",
+            "todo:", "todo"
+        ]:
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip(" :,-")
+                break
+
+        title = cleaned.capitalize() if cleaned else "New Task"
+        if len(title) > 60:
+            title = title[:60].rsplit(" ", 1)[0]
+
+        description = raw_prompt
+
+        priority = "high" if "high" in raw_prompt.lower() or "urgent" in raw_prompt.lower() else "normal"
+
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        due_date = None
+        if "tomorrow" in raw_prompt.lower():
+            due_date = (now + timedelta(days=1)).replace(hour=17, minute=0, second=0).isoformat()
+        elif "tonight" in raw_prompt.lower():
+            due_date = now.replace(hour=20, minute=0, second=0).isoformat()
+        elif "today" in raw_prompt.lower():
+            due_date = now.replace(hour=18, minute=0, second=0).isoformat()
+
+        return title, description, due_date, priority
+
+    @classmethod
     def _mock_structured_output(cls, prompt: str, schema: Type[T]) -> T:
         """Heuristic mock outputs for local development without API keys."""
         logger.info(f"Generating mock structured output for schema: {schema.__name__}")
@@ -221,6 +268,7 @@ class GeminiClient:
         if schema.__name__ == "IntentRouterOutput":
             intent = "GENERAL_CHAT"
             title = None
+            description = None
             due_date = None
             priority = "normal"
             task_search_query = None
@@ -233,14 +281,13 @@ class GeminiClient:
                 elif any(kw in prompt_lower for kw in ["update", "edit", "change", "reschedule"]):
                     intent = "UPDATE_TASK"
                     task_search_query = prompt.strip()
-                    title = "Updated Task"
+                    title, description, due_date, priority = cls._extract_mock_task_details(user_text)
                 elif any(kw in prompt_lower for kw in ["complete", "done", "finish", "completed"]):
                     intent = "COMPLETE_TASK"
                     task_search_query = prompt.strip()
                 else:
                     intent = "CREATE_TASK"
-                    title = "New Scheduled Task"
-                    due_date = "2026-07-05T20:00:00" if "tomorrow" in prompt_lower else None
+                    title, description, due_date, priority = cls._extract_mock_task_details(user_text)
             elif any(kw in prompt_lower for kw in ["list", "show", "find", "what do i", "search"]):
                 if any(kw in prompt_lower for kw in ["today", "tomorrow", "calendar", "week", "schedule"]):
                     intent = "CALENDAR_QUERY"
@@ -255,11 +302,12 @@ class GeminiClient:
             return schema(
                 intent=intent,
                 title=title,
+                description=description,
                 due_date=due_date,
                 priority=priority,
                 task_search_query=task_search_query,
                 sql_search_filter=sql_search_filter,
-                chat_reply_suggestion=f"[Mock Route: {intent}] Set GEMINI_API_KEY for live AI."
+                chat_reply_suggestion=f"[Mock Route: {intent}] {title or 'Request processed'}"
             )
 
         if schema.__name__ == "MultiAgentPlan":
@@ -268,12 +316,15 @@ class GeminiClient:
             
             # Check for multiple intents or keywords
             if any(kw in prompt_lower for kw in ["remind", "todo", "task", "call", "meeting", "schedule"]):
+                title, description, due_date, priority = cls._extract_mock_task_details(user_text)
                 sub_tasks.append(SubTask(
                     task_id=f"task_{len(sub_tasks)+1}",
                     intent="CREATE_TASK",
                     agent_target="task_worker",
-                    title="Scheduled Task",
-                    due_date="2026-07-05T20:00:00" if "tomorrow" in prompt_lower else None,
+                    title=title,
+                    description=description,
+                    priority=priority,
+                    due_date=due_date,
                     sub_prompt=prompt
                 ))
 
